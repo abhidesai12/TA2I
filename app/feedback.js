@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,10 +7,14 @@ import {
   ScrollView,
   Modal,
   FlatList,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import { generateFeedback } from './utils/gptApi';
 
 // Mock data - replace with actual data later
 const assignments = [
@@ -33,7 +37,8 @@ export default function Feedback() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [showStudentModal, setShowStudentModal] = useState(false);
-  const [infoVisible, setInfoVisible] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progressStatus, setProgressStatus] = useState('');
 
   const handleFilePick = async () => {
     try {
@@ -42,21 +47,90 @@ export default function Feedback() {
         copyToCacheDirectory: true,
       });
 
-      if (result.type === "success") {
-        setSelectedFile(result);
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const file = result.assets[0];
+        const fileData = {
+          name: file.name,
+          uri: file.uri,
+          type: file.mimeType,
+          size: file.size
+        };
+        setSelectedFile(fileData);
+        console.log('New selected file state:', fileData);
+      } else {
+        console.log('File selection was cancelled or failed');
       }
     } catch (err) {
-      console.log("Error picking document:", err);
+      console.error("Error picking document:", err);
+      setSelectedFile(null);
     }
   };
 
-  const handleGenerateFeedback = () => {
+  const handleTakePicture = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
+      
+      if (!permissionResult.granted) {
+        alert("You need to enable camera permissions to take a picture.");
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 1,
+      });
+
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const photo = result.assets[0];
+        const fileData = {
+          name: 'photo_' + new Date().getTime() + '.jpg',
+          uri: photo.uri,
+          type: 'image/jpeg',
+          size: photo.fileSize || 0
+        };
+        setSelectedFile(fileData);
+      }
+    } catch (err) {
+      console.error("Error taking picture:", err);
+      alert("Failed to take picture. Please try again.");
+    }
+  };
+
+  useEffect(() => {
+    console.log('selectedFile state changed:', selectedFile);
+  }, [selectedFile]);
+
+  const handleGenerateFeedback = async () => {
     if (!selectedAssignment || !selectedStudent || !selectedFile) {
-      alert("Please select all required fields");
+      Alert.alert("Missing Information", "Please select an assignment, student, and file before generating feedback.");
       return;
     }
-    // TODO: Implement feedback generation
-    console.log("Generating feedback...");
+
+    setIsLoading(true);
+    try {
+      const feedbackResponse = await generateFeedback(
+        selectedFile,
+        selectedStudent,
+        selectedAssignment,
+        (status) => setProgressStatus(status)
+      );
+
+      // Navigate to response page
+      router.push({
+        pathname: "/gptResponse",
+        params: { response: feedbackResponse }
+      });
+    } catch (error) {
+      console.error('Error:', error);
+      Alert.alert(
+        "Error",
+        "Failed to generate feedback. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+      setProgressStatus('');
+    }
   };
 
   const renderModal = (
@@ -129,29 +203,7 @@ export default function Feedback() {
           <Text style={styles.backText}>Back</Text>
         </TouchableOpacity>
         <Text style={styles.title}>Feedback</Text>
-        <TouchableOpacity onPress={() => setInfoVisible(true)}>
-          <Ionicons name="information-circle-outline" size={28} color="#6B46C1" />
-        </TouchableOpacity>
       </View>
-
-      {/* Info Modal */}
-      <Modal visible={infoVisible} transparent animationType="slide">
-        <View style={styles.modalContainer}>
-          <View style={styles.infoModalContent}>
-            <Text style={styles.infoModalTitle}>How to Use Feedback</Text>
-            <Text style={styles.infoModalText}>
-              Select an assignment and a student to provide feedback.
-              You can also upload documents for review.
-            </Text>
-            <TouchableOpacity
-              style={styles.infoCloseButton}
-              onPress={() => setInfoVisible(false)}
-            >
-              <Text style={styles.infoCloseButtonText}>Close</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
 
       {/* Main Content */}
       <ScrollView style={styles.content} contentContainerStyle={styles.contentContainer}>
@@ -188,24 +240,39 @@ export default function Feedback() {
           <Text style={styles.label}>Student Work</Text>
           <TouchableOpacity style={styles.uploadButton} onPress={handleFilePick}>
             <Ionicons name="cloud-upload-outline" size={24} color="#6B46C1" />
-            <Text style={styles.uploadText}>
-              {selectedFile ? selectedFile.name : "Upload File"}
-            </Text>
+            <Text style={styles.uploadText}>Upload File</Text>
           </TouchableOpacity>
+          <TouchableOpacity style={styles.cameraButton} onPress={handleTakePicture}>
+            <Ionicons name="camera-outline" size={24} color="#6B46C1" />
+            <Text style={styles.uploadText}>Take Picture</Text>
+          </TouchableOpacity>
+          <Text style={styles.fileNameText}>
+            {selectedFile ? `Selected: ${selectedFile.name}` : "No file selected"}
+          </Text>
         </View>
 
         {/* Generate Button */}
         <TouchableOpacity
           style={[
             styles.generateButton,
-            (!selectedAssignment || !selectedStudent || !selectedFile) &&
+            (!selectedAssignment || !selectedStudent || !selectedFile || isLoading) &&
               styles.generateButtonDisabled,
           ]}
           onPress={handleGenerateFeedback}
-          disabled={!selectedAssignment || !selectedStudent || !selectedFile}
+          disabled={!selectedAssignment || !selectedStudent || !selectedFile || isLoading}
         >
-          <Text style={styles.generateButtonText}>Generate Feedback</Text>
+          {isLoading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.generateButtonText}>Generate Feedback</Text>
+          )}
         </TouchableOpacity>
+
+        {isLoading && (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>{progressStatus}</Text>
+          </View>
+        )}
       </ScrollView>
 
       {/* Modals */}
@@ -256,7 +323,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     marginTop: 60,
     marginBottom: 20,
-    justifyContent: "space-between",
   },
   backButton: {
     flexDirection: "row",
@@ -306,16 +372,35 @@ const styles = StyleSheet.create({
   uploadButton: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#F7FAFC",
-    padding: 16,
-    borderRadius: 12,
+    justifyContent: "center",
+    padding: 12,
+    borderRadius: 8,
     borderWidth: 1,
+    borderStyle: "dashed",
     borderColor: "#E2E8F0",
+    marginBottom: 8,
+  },
+  cameraButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderStyle: "dashed",
+    borderColor: "#E2E8F0",
+    marginBottom: 8,
+    backgroundColor: "#F7FAFC",
   },
   uploadText: {
-    marginLeft: 12,
-    fontSize: 16,
+    color: "#6B46C1",
+    marginLeft: 8,
+  },
+  fileNameText: {
+    marginTop: 8,
+    fontSize: 14,
     color: "#4A5568",
+    textAlign: "center",
   },
   generateButton: {
     backgroundColor: "#6B46C1",
@@ -378,42 +463,6 @@ const styles = StyleSheet.create({
     color: "#6B46C1",
     fontWeight: "600",
   },
-  modalContainer: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0, 0, 0, 0.5)",
-  },
-  infoModalContent: {
-    width: "80%",
-    backgroundColor: "white",
-    borderRadius: 10,
-    padding: 20,
-    alignItems: "center",
-  },
-  infoModalTitle: {
-    fontSize: 20,
-    fontWeight: "bold",
-    marginBottom: 10,
-    color: "#2D3748",
-  },
-  infoModalText: {
-    fontSize: 16,
-    textAlign: "center",
-    color: "#4A5568",
-    marginBottom: 20,
-  },
-  infoCloseButton: {
-    backgroundColor: "#6B46C1",
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 5,
-  },
-  infoCloseButtonText: {
-    color: "white",
-    fontSize: 16,
-    fontWeight: "600",
-  },
   bottomNav: {
     flexDirection: "row",
     justifyContent: "space-around",
@@ -425,5 +474,13 @@ const styles = StyleSheet.create({
   },
   navButton: {
     padding: 10,
+  },
+  loadingContainer: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 14,
+    color: "#666",
   },
 });
