@@ -7,11 +7,14 @@ import {
   ScrollView,
   Modal,
   FlatList,
+  Alert,
+  ActivityIndicator,
 } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as ImagePicker from "expo-image-picker";
+import { generateFeedback } from './utils/gptApi';
 
 // Mock data - replace with actual data later
 const assignments = [
@@ -34,6 +37,8 @@ export default function Feedback() {
   const [selectedFile, setSelectedFile] = useState(null);
   const [showAssignmentModal, setShowAssignmentModal] = useState(false);
   const [showStudentModal, setShowStudentModal] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  const [progressStatus, setProgressStatus] = useState('');
 
   const handleFilePick = async () => {
     try {
@@ -96,13 +101,36 @@ export default function Feedback() {
     console.log('selectedFile state changed:', selectedFile);
   }, [selectedFile]);
 
-  const handleGenerateFeedback = () => {
+  const handleGenerateFeedback = async () => {
     if (!selectedAssignment || !selectedStudent || !selectedFile) {
-      alert("Please select all required fields");
+      Alert.alert("Missing Information", "Please select an assignment, student, and file before generating feedback.");
       return;
     }
-    // TODO: Implement feedback generation
-    console.log("Generating feedback...");
+
+    setIsLoading(true);
+    try {
+      const feedbackResponse = await generateFeedback(
+        selectedFile,
+        selectedStudent,
+        selectedAssignment,
+        (status) => setProgressStatus(status)
+      );
+
+      // Navigate to response page
+      router.push({
+        pathname: "/gptResponse",
+        params: { response: feedbackResponse }
+      });
+    } catch (error) {
+      console.error('Error:', error);
+      Alert.alert(
+        "Error",
+        "Failed to generate feedback. Please try again."
+      );
+    } finally {
+      setIsLoading(false);
+      setProgressStatus('');
+    }
   };
 
   const renderModal = (
@@ -227,14 +255,24 @@ export default function Feedback() {
         <TouchableOpacity
           style={[
             styles.generateButton,
-            (!selectedAssignment || !selectedStudent || !selectedFile) &&
+            (!selectedAssignment || !selectedStudent || !selectedFile || isLoading) &&
               styles.generateButtonDisabled,
           ]}
           onPress={handleGenerateFeedback}
-          disabled={!selectedAssignment || !selectedStudent || !selectedFile}
+          disabled={!selectedAssignment || !selectedStudent || !selectedFile || isLoading}
         >
-          <Text style={styles.generateButtonText}>Generate Feedback</Text>
+          {isLoading ? (
+            <ActivityIndicator color="white" />
+          ) : (
+            <Text style={styles.generateButtonText}>Generate Feedback</Text>
+          )}
         </TouchableOpacity>
+
+        {isLoading && (
+          <View style={styles.loadingContainer}>
+            <Text style={styles.loadingText}>{progressStatus}</Text>
+          </View>
+        )}
       </ScrollView>
 
       {/* Modals */}
@@ -436,5 +474,13 @@ const styles = StyleSheet.create({
   },
   navButton: {
     padding: 10,
+  },
+  loadingContainer: {
+    marginTop: 20,
+    alignItems: 'center',
+  },
+  loadingText: {
+    fontSize: 14,
+    color: "#666",
   },
 });
